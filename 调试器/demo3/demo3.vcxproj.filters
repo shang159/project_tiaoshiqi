@@ -15,34 +15,30 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="ReadMe.txt" />
+    <ClCompile Include="main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="PeFile.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="stdafx.h">
+    <ClInclude Include="resource.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="targetver.h">
+    <ClInclude Include="Debug.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="DebugInfo.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="FileInfo.h">
+    <ClInclude Include="PeFile.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="stdafx.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="LoadFile.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="DebugInfo.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="FileInfo.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
+    <ResourceCompile Include="demo3.rc">
+      <Filter>资源文件</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>
