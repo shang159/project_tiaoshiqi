@@ -41,7 +41,7 @@ void CDebug::DebugMain()
 	//1.2	初始化调试事件结构体
 	DEBUG_EVENT DbgEvent = { 0 };
 	DWORD dwState = DBG_EXCEPTION_NOT_HANDLED;
-	//2.等待目标Exe产生调试事件
+	//2.等待目标Exe产生调试事件  
 	while (1)
 	{
 		WaitForDebugEvent(&DbgEvent, INFINITE);
@@ -121,7 +121,7 @@ DWORD CDebug::OnException(DEBUG_EVENT& de)
 	ShowRegisterInfo(ct);
 	printf("Exception Addr:0x%08X\n", (DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress);
 	// 根据异常类型分别处理
-	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
+	DWORD dwRet = DBG_CONTINUE;
 	switch (de.u.Exception.ExceptionRecord.ExceptionCode)
 	{
 		//软件断点
@@ -211,14 +211,19 @@ DWORD CDebug::OnExceptionCc(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"软件断点\n");
 	DWORD dwRet = DBG_CONTINUE;
-	WaitforUserCommand(de);//传入de？？
+	WaitforUserCommand(de);
 	return dwRet;
 }
 DWORD CDebug::OnExceptionSingleStep(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"单步断点\n");
-	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
-	//WaitforUserCommand();
+	DWORD dwRet = DBG_CONTINUE;
+	IsSingle = TRUE;
+	if (isCmdgo)
+	{
+		return dwRet;
+	}
+	WaitforUserCommand(de);
 	return dwRet;
 }
 DWORD CDebug::OnExceptionAccess(DEBUG_EVENT& de)
@@ -241,8 +246,8 @@ void CDebug::WaitforUserCommand(DEBUG_EVENT& de)
 			UserCommandDisasm(szCommand);
 			break;
 		case 't':// 单步F7 当前不继续接受用户命令
-			UserCommandF7(szCommand);
-			return;
+			UserCommandF7(szCommand,de);
+			return ;
 		case 'p':// 单步F8 当前不继续接受用户命令
 			UserCommandF8(szCommand);
 			return;
@@ -352,8 +357,57 @@ void CDebug::SetallCC(HANDLE hProcess)
 		}
 	}
 }
-void CDebug::UserCommandF7(CHAR* pCommand)
+void CDebug::UserCommandF7(CHAR* pCommand, DEBUG_EVENT& de)
 {
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, 0, de.dwThreadId);
+	//将eip向前移动1个
+	CONTEXT ct = {};
+	ct.ContextFlags = CONTEXT_ALL;// all register
+	GetThreadContext(hThread, &ct);
+
+	EFLAGS* eflags = (EFLAGS*)&ct.EFlags;
+	for (int i = 0; i < m_vecBp.size(); i++)
+	{
+		//判断cc是自己修改的还是系统自带的
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress==m_vecBp[i].dwAddress)
+		{
+			//如果是自己设置的  并且是单步运行到此处
+			if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == ct.Eip)
+			{
+				ResetAllCC(hProcess);
+				eflags->TF = 1;
+				SetThreadContext(hThread, &ct);
+				if (IsSingle)
+				{
+					SetallCC(hProcess);
+					IsSingle = false;
+				}
+			}
+
+			//如果是自己设置的  并且是GO 运行到此处
+			else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress + 1 == ct.Eip)
+			{	//恢复断点之前的内容
+				ct.Eip--;
+				ResetAllCC(hProcess);
+				eflags->TF = 1;
+				SetThreadContext(hThread, &ct);
+				if (IsSingle)
+				{
+					SetallCC(hProcess);
+					IsSingle = false;
+				}
+			}
+		} 		
+		//如果是系统自身的，则设置单步。 
+		else
+		{
+			eflags->TF = 1;
+			SetThreadContext(hThread, &ct);
+		}
+	}
+	CloseHandle(hProcess);
+	CloseHandle(hThread);
 
 }
 void CDebug::UserCommandF8(CHAR* pCommand)
@@ -369,7 +423,7 @@ void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
 	ct.ContextFlags = CONTEXT_ALL;// all register
 	GetThreadContext(hThread, &ct);
 	//判断cc是自己修改的还是系统自带的
-
+	EFLAGS* eflags = (EFLAGS*)&ct.EFlags;
 	for (int i = 0; i < m_vecBp.size(); i++)
 	{
 		
@@ -377,7 +431,14 @@ void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
 		{	//恢复断点之前的内容
 			ct.Eip--;
 			ResetAllCC(hProcess);
+			eflags->TF = 1;
 			SetThreadContext(hProcess, &ct);
+			if (IsSingle)
+			{
+				SetallCC(hProcess);
+				isCmdgo = TRUE;
+			}
+			
 		}
 	}
 	CloseHandle(hProcess);
