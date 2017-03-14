@@ -27,6 +27,7 @@ private:
 		EXCEPTIONTYPE bt;// 断点类型
 		DWORD dwAddress; // 断点地址
 		BOOL bOnce;		 // 一次性断点
+		BOOL bSys;
 		// 其他属性，比如内存断点还有读写，写，执行等等
 		union
 		{
@@ -55,12 +56,15 @@ public:
 	DWORD OnExceptionCc(DEBUG_EVENT& de);
 	DWORD OnExceptionSingleStep(DEBUG_EVENT& de);
 	DWORD OnExceptionAccess(DEBUG_EVENT& de);
-	void WaitforUserCommand();
+	void WaitforUserCommand(DEBUG_EVENT& de);
 	void UserCommandDisasm(CHAR* pCommand);
 	void ResetAllCC(HANDLE hProcess);
 	BOOL ResetCC(HANDLE hProcess, BPINFO &bi);
 	UINT DBG_Disasm(HANDLE hProcess, LPVOID lpAddress, PWCHAR pOPCode, PWCHAR pASM, PWCHAR pComment);
 	void SetallCC(HANDLE hProcess);
+	void UserCommandF7(CHAR* pCommand);
+	void UserCommandF8(CHAR* pCommand);
+	void UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de);
 public:
 	vector<BPINFO> m_vecBp;
 	PROCESS_INFORMATION m_pi = {};

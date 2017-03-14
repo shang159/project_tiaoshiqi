@@ -61,7 +61,6 @@ DWORD CDebug::DispatchDbgEvent(DEBUG_EVENT& de)
 	switch (de.dwDebugEventCode)
 	{
 	case CREATE_PROCESS_DEBUG_EVENT:	//进程调试
-
 		dwRet = OnCreateProcess(de);
 		break;
 	case EXCEPTION_DEBUG_EVENT:			//异常调试
@@ -71,9 +70,11 @@ DWORD CDebug::DispatchDbgEvent(DEBUG_EVENT& de)
 	case EXIT_THREAD_DEBUG_EVENT:		//退出线程
 	case EXIT_PROCESS_DEBUG_EVENT:		//退出进程
 	case LOAD_DLL_DEBUG_EVENT:			//加载DLL
-		//printf("Load:%x\n", pDebugEvent->u.LoadDll.lpBaseOfDll); break;
+		
+		break;
 	case UNLOAD_DLL_DEBUG_EVENT:		//卸载DLL
-		//printf("UnLoad:%x\n", pDebugEvent->u.UnloadDll.lpBaseOfDll); break;
+		//printf("UnLoad:%x\n", pDebugEvent->u.UnloadDll.lpBaseOfDll); 
+		break;
 	case OUTPUT_DEBUG_STRING_EVENT:		//输出调试字符串
 	case RIP_EVENT:						//RIP调试
 		return dwRet;	//不处理
@@ -209,23 +210,25 @@ VOID CDebug::ShowRegisterInfo(CONTEXT& ct)
 DWORD CDebug::OnExceptionCc(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"软件断点\n");
-	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
-	WaitforUserCommand();
+	DWORD dwRet = DBG_CONTINUE;
+	WaitforUserCommand(de);//传入de？？
 	return dwRet;
 }
 DWORD CDebug::OnExceptionSingleStep(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"单步断点\n");
 	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
+	//WaitforUserCommand();
 	return dwRet;
 }
 DWORD CDebug::OnExceptionAccess(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"内存访问异常\n");
 	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
+	//WaitforUserCommand();
 	return dwRet;
 }
-void CDebug::WaitforUserCommand()
+void CDebug::WaitforUserCommand(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"等待用户命令\n");
 	CHAR szCommand[MAX_INPUT] = {};
@@ -238,10 +241,13 @@ void CDebug::WaitforUserCommand()
 			UserCommandDisasm(szCommand);
 			break;
 		case 't':// 单步F7 当前不继续接受用户命令
+			UserCommandF7(szCommand);
 			return;
 		case 'p':// 单步F8 当前不继续接受用户命令
+			UserCommandF8(szCommand);
 			return;
 		case 'g':// go
+			UserCommandGO(szCommand, de);
 			return;
 		default:
 			break;
@@ -345,4 +351,35 @@ void CDebug::SetallCC(HANDLE hProcess)
 			SetCcBreakPoint(hProcess, each.dwAddress, each.u.bCCOld);
 		}
 	}
+}
+void CDebug::UserCommandF7(CHAR* pCommand)
+{
+
+}
+void CDebug::UserCommandF8(CHAR* pCommand)
+{
+
+}
+void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
+{
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, 0, de.dwThreadId);
+	//将eip向前移动1个
+	CONTEXT ct = {};
+	ct.ContextFlags = CONTEXT_ALL;// all register
+	GetThreadContext(hThread, &ct);
+	//判断cc是自己修改的还是系统自带的
+
+	for (int i = 0; i < m_vecBp.size(); i++)
+	{
+		
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress== m_vecBp[i].dwAddress)
+		{	//恢复断点之前的内容
+			ct.Eip--;
+			ResetAllCC(hProcess);
+			SetThreadContext(hProcess, &ct);
+		}
+	}
+	CloseHandle(hProcess);
+	CloseHandle(hThread);
 }
