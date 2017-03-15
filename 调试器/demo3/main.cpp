@@ -14,11 +14,6 @@ void ShowMenu()
 	printf_s("\t3.ÍË³ö\n");
 	printf_s("\n");
 	printf_s("**********************************\n");
-	HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
-	CONSOLE_CURSOR_INFO CursorInfo;
-	GetConsoleCursorInfo(handle, &CursorInfo);
-	CursorInfo.bVisible = false;
-	SetConsoleCursorInfo(handle, &CursorInfo);
 }
 
 int main()

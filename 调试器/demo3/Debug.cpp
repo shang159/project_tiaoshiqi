@@ -4,6 +4,7 @@
 #define BEA_USE_STDCALL
 #include "Bea/headers/BeaEngine.h"
 #include <strsafe.h>
+#include <ntsecapi.h>
 #pragma comment(lib, "Bea/Win32/Lib/BeaEngine.lib")
 #pragma comment(linker, "/NODEFAULTLIB:\"crt.lib\"")
 
@@ -93,6 +94,7 @@ DWORD CDebug::OnCreateProcess(DEBUG_EVENT& de)
 	BPINFO bi = {};
 	bi.bt = BP_CC;
 	bi.dwAddress = dwOep;
+	bi.bOnce = FALSE;
 	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, de.dwProcessId);
 	if (SetCcBreakPoint(hProcess, dwOep, bi.u.bCCOld))
 	{
@@ -249,11 +251,13 @@ void CDebug::WaitforUserCommand(DEBUG_EVENT& de)
 			UserCommandF7(szCommand,de);
 			return ;
 		case 'p':// 单步F8 当前不继续接受用户命令
-			UserCommandF8(szCommand);
+			UserCommandF8(szCommand,de);
 			return;
 		case 'g':// go
 			UserCommandGO(szCommand, de);
 			return;
+		case 'b':
+			UserCommandBk(szCommand, de);
 		default:
 			break;
 		}
@@ -281,9 +285,9 @@ void CDebug::UserCommandDisasm(CHAR* pCommand)
 	WCHAR szOpCode[50] = {};
 	WCHAR szAsm[50] = {};
 	WCHAR szComment[50] = {};
-	//2.3 一次反汇编1条,默认反汇编5条，可以自定义反汇编指令数目，也可以由输入命令指定
+	//2.3 一次反汇编1条,默认反汇编15条，可以自定义反汇编指令数目，也可以由输入命令指定
 	UINT uLen;
-	for (int i = 0; i < 10; i++)
+	for (int i = 0; i < 15; i++)
 	{
 		uLen = DBG_Disasm(hProcess, (PVOID)dwAddress, szOpCode, szAsm, szComment);
 		wprintf_s(L"0x%08X %-16s%s\n", dwAddress, szOpCode, szAsm);
@@ -349,9 +353,10 @@ UINT CDebug::DBG_Disasm(HANDLE hProcess, LPVOID lpAddress, PWCHAR pOPCode, PWCHA
 }
 void CDebug::SetallCC(HANDLE hProcess)
 {
+
 	for (auto each : m_vecBp)
 	{
-		if (each.bt == BP_CC)
+		if (each.bt == BP_CC && each.bOnce!=FALSE)
 		{
 			SetCcBreakPoint(hProcess, each.dwAddress, each.u.bCCOld);
 		}
@@ -410,8 +415,138 @@ void CDebug::UserCommandF7(CHAR* pCommand, DEBUG_EVENT& de)
 	CloseHandle(hThread);
 
 }
-void CDebug::UserCommandF8(CHAR* pCommand)
+void CDebug::UserCommandF8(CHAR* pCommand, DEBUG_EVENT& de)
 {
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, 0, de.dwThreadId);
+	CONTEXT ct = {};
+	ct.ContextFlags = CONTEXT_ALL;// all register
+	GetThreadContext(hThread, &ct);
+	EFLAGS* eflags = (EFLAGS*)&ct.EFlags;
+	WCHAR szOpCode[50] = {};
+	WCHAR szAsm[50] = {};
+	WCHAR szComment[50] = {};
+	//2.3 一次反汇编1条,默认反汇编5条，可以自定义反汇编指令数目，也可以由输入命令指定
+	UINT uLen;
+	WCHAR seps[] = L" ";
+	WCHAR *token = NULL;
+	WCHAR *next_token = NULL;
+	
+	DWORD dwAddress = ct.Eip;
+	uLen = DBG_Disasm(hProcess, (PVOID)dwAddress, szOpCode, szAsm, szComment);
+	token = wcstok_s(szAsm, seps, &next_token);
+	for (int i = 0; i < m_vecBp.size(); i++)
+	{
+		//判断cc是自己修改的还是系统自带的
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress)
+		{
+
+			//如果是自己设置的  并且是单步运行到此处
+			if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == ct.Eip)
+			{
+				//如果停止的eip并不是call 或者rep
+				if (wcscmp(token, L"call") == 0 || wcscmp(token, L"rep") == 0)
+				{
+
+
+					BPINFO bi = {};
+					bi.bt = BP_CC;
+					bi.dwAddress = ct.Eip + uLen;
+					bi.bOnce = TRUE;
+					SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
+					m_vecBp.push_back(bi);
+					eflags->TF = 1;
+					if (IsSingle)
+					{
+						SetallCC(hProcess);
+					}
+					
+				}
+				//如果eip指向call之类的
+				else
+				{
+					eflags->TF = 1;
+					SetThreadContext(hThread, &ct);
+					IsSingle = TRUE;
+				}
+			}
+			//如果是自己设置的  并且是GO 运行到此处
+			else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress + 1 == ct.Eip)
+			{
+		
+				//如果是call之类的
+				if (wcscmp(token, L"call") == 0 || wcscmp(token, L"rep") == 0)
+				{
+					
+					if (IsSingle)
+					{
+						SetallCC(hProcess);
+						IsSingle = FALSE;
+					}
+					else
+					{
+						BPINFO bi = {};
+						bi.bt = BP_CC;
+						bi.dwAddress = ct.Eip + uLen;
+						bi.bOnce = TRUE;
+						SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
+						m_vecBp.push_back(bi);
+						ct.Eip--;
+						eflags->TF = 1;
+					}
+
+
+					
+				}
+				//如果停止的eip并不是call 或者rep
+				else
+				{
+
+					eflags->TF = 1;
+					ct.Eip--;
+					SetThreadContext(hThread, &ct);
+					if (m_vecBp[i].bOnce)
+					{
+						BPINFO bi = {};
+						bi.bOnce = TRUE;
+						ResetCC(hProcess, m_vecBp[i]);
+						IsCmdF8 = true;
+					}
+					if (IsSingle)
+					{
+						SetallCC(hProcess);
+						IsSingle = FALSE;
+					}
+					//IsSingle = TRUE;
+				}
+
+			}
+		}
+		//如果是系统自身的软件断点
+		else
+		{
+			//如果停止的eip是call 或者rep
+			if (wcscmp(token, L"call") == 0 || wcscmp(token, L"rep") == 0)
+			{
+				BPINFO bi = {};
+				bi.bt = BP_CC;
+				bi.dwAddress = ct.Eip + uLen;
+				bi.bOnce = TRUE;
+				SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
+				m_vecBp.push_back(bi);
+				return;
+				
+			}
+			//如果不是call
+			else
+			{
+				eflags->TF = 1;
+				SetThreadContext(hThread, &ct);
+			}
+		}
+	}
+	CloseHandle(hProcess);
+	CloseHandle(hThread);
 
 }
 void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
@@ -436,11 +571,34 @@ void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
 			if (IsSingle)
 			{
 				SetallCC(hProcess);
-				isCmdgo = TRUE;
+				IsSingle = FALSE;
 			}
 			
 		}
 	}
 	CloseHandle(hProcess);
 	CloseHandle(hThread);
+}
+
+void CDebug::UserCommandBk(CHAR* pCommand, DEBUG_EVENT& de)
+{
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, 0, de.dwThreadId);
+	char seps[] = " ";
+	char *token = NULL;
+	char *next_token = NULL;
+
+	// token = 'u'
+	token = strtok_s(pCommand, seps, &next_token);
+	//2.1 反汇编地址
+	// token = address(123456)
+	token = strtok_s(NULL, seps, &next_token);
+	DWORD dwAddress2 = strtol(token, NULL, 16);
+	BPINFO bi = {};
+	bi.bt = BP_CC;
+	bi.dwAddress = dwAddress2;
+	bi.bOnce = FALSE;
+	SetCcBreakPoint(hProcess, dwAddress2, bi.u.bCCOld);
+
+	m_vecBp.push_back(bi);
 }
