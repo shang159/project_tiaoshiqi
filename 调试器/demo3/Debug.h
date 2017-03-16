@@ -55,7 +55,55 @@ typedef struct _EFLAGS
 	unsigned VIP : 1;  // 虚拟中断标志
 	unsigned ID : 1;  // cpuID检查标志
 	unsigned Reservel5 : 1;  // 保留 
-}EFLAGS, *PEFLAGS;
+}EFLAGS, *PEFLAGS; 
+typedef struct _DBG_REG6
+{
+	//断点命中标志位，如果位于DR0-3的某个断点被命中，则进行异常处理前，对应的B0-3就会被置为1
+	unsigned B0 : 1;//Dr0 断点触发置位
+	unsigned B1 : 1;//Dr1 断点触发置位
+	unsigned B2 : 1;//Dr2 断点触发置位
+	unsigned B3 : 1;//Dr3 断点触发置位
+	unsigned Reserve1: 9;//保留字段
+	//其他状态字段
+	unsigned BD : 1; //调试寄存器本身触发断点后，此位置被置为1
+	unsigned BS : 1;//单步异常被触发，需要与寄存器EFLAGS的TF联合使用
+	unsigned BT : 1;//此位与TSS的T标识联合使用，用于接收cpu任务切换异常
+	unsigned Reserve2 : 16;//保留字段
+}DBG_REG6, *PDBG_REG6;
+typedef union  _DBG_REG7
+{
+	DWORD useDword;
+	struct{
+		//局部断点（L0-3）与全局断点（G0-3）的标志位
+		unsigned L0 : 1;//对Dr0保存的地址启用局部断点
+		unsigned G0 : 1;//对Dr0保存的地址启用全局断点
+		unsigned L1 : 1;//对Dr1保存的地址启用局部断点
+		unsigned G1 : 1;//对Dr1保存的地址启用全局断点
+		unsigned L2 : 1;//对Dr2保存的地址启用局部断点
+		unsigned G2 : 1;//对Dr2保存的地址启用全局断点
+		unsigned L3 : 1;//对Dr3保存的地址启用局部断点
+		unsigned G3 : 1;//对Dr3保存的地址启用全局断点
+		//已经弃用，用于降低CPU频率，以方便准确检测断点异常
+		unsigned LE : 1;
+		unsigned GE : 1;
+		unsigned Reserve1 : 3;//保留字段
+		unsigned GD : 1;//保护调试寄存器标志位，如果此位为1，则有指令修改调试寄存器时会触发异常
+		unsigned Reserve2 : 2;//保留字段
+		//保存Dr0-Dr3地址所指向位置的断点类型（RW0-3）与断点长度（LEN0-3），状态描述如下
+		unsigned RW0 : 2;  //设定Dr0指向地址的断点类型
+		unsigned LEN0 : 2;//设定Dr0指向地址的长度
+		unsigned RW1 : 2;//设定Dr1指向地址的断点类型
+		unsigned LEN1 : 2;//设定Dr1指向地址的长度
+		unsigned RW2 : 2;//设定Dr2指向地址的断点类型
+		unsigned LEN2 : 2;//设定Dr2指向地址的长度
+		unsigned RW3 : 2;//设定Dr3指向地址的断点类型
+		unsigned LEN3 : 2;//设定Dr3指向地址的长度
+	}useStruct;
+}DBG_REG7, *PDBG_REG7;
+
+
+
+
 class CDebug
 {
 private:
@@ -71,11 +119,10 @@ public:
 	DWORD OnException(DEBUG_EVENT& de);
 	// 模块加载事件
 	DWORD OnLoadDll(DEBUG_EVENT& de);
-
-
 	// 设置CC软件断点
 	
 	BOOL SetCcBreakPoint(HANDLE hProcess, DWORD dwAddress, BYTE& oldByte);
+	BOOL SetHkBreakPoint(HANDLE hProcess, DWORD dwAddress);
 	VOID ShowRegisterInfo(CONTEXT& ct);
 	DWORD OnExceptionCc(DEBUG_EVENT& de);
 	DWORD OnExceptionSingleStep(DEBUG_EVENT& de);
@@ -90,10 +137,12 @@ public:
 	void UserCommandF8(CHAR* pCommand, DEBUG_EVENT& de);
 	void UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de);
 	void UserCommandBk(CHAR* pCommand, DEBUG_EVENT& de);
+	void UserCommandHk(CHAR* szCommand, DEBUG_EVENT& de);
 public:
 	BOOL IsSingle=FALSE;
 	vector<BPINFO> m_vecBp;
 	PROCESS_INFORMATION m_pi = {};
+	int ToDelOfHK = 0;
 	BOOL isCmdgo;
 	BOOL IsCmdF8=FALSE;
 };

@@ -45,7 +45,7 @@ void CDebug::DebugMain()
 	//2.等待目标Exe产生调试事件  
 	while (1)
 	{
-		WaitForDebugEvent(&DbgEvent, INFINITE);
+ 		WaitForDebugEvent(&DbgEvent, INFINITE);
 		//2.1 根据调试事件类型,分别处理
 		dwState = DispatchDbgEvent(DbgEvent);
 		//2.2 处理完异常,继续运行被调试Exe
@@ -174,6 +174,68 @@ BOOL CDebug::SetCcBreakPoint(HANDLE hProcess, DWORD dwAddress, BYTE& oldByte)
 	return bRet;
 
 }
+
+BOOL CDebug::SetHkBreakPoint(HANDLE hThread, DWORD dwAddress)
+{
+	BPINFO bi = {};
+	bi.bt = BP_HP;
+	bi.dwAddress = dwAddress;
+	bi.bOnce = FALSE;
+
+	CONTEXT stxCxt = { CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS };
+	//获取线程上下文
+	GetThreadContext(hThread, &stxCxt);
+	//通过修改stcCxt来修改寄存器，设置硬件断点
+	//Dr0-Dr3负责保存断点的内存地址，Dr6保存断点触发后的状态信息。
+	//Dr7用来定义断点的中断条件
+	if (stxCxt.Dr0 == 0)
+	{
+		stxCxt.Dr0 = dwAddress;//要设置硬件断点的地址
+		PDBG_REG7 pDr7 = (PDBG_REG7)&stxCxt.Dr7;//调试寄存器7
+		pDr7->useStruct.L0 = TRUE;
+		pDr7->useStruct.LEN0 = 0;
+		pDr7->useStruct.RW0 = 0;
+		SetThreadContext(hThread,&stxCxt);
+		m_vecBp.push_back(bi);
+	}
+	else if (stxCxt.Dr1 == 0)
+	{
+		stxCxt.Dr0 = dwAddress;//要设置硬件断点的地址
+		PDBG_REG7 pDr7 = (PDBG_REG7)&stxCxt.Dr7;//调试寄存器7
+		pDr7->useStruct.L1 = TRUE;
+		pDr7->useStruct.LEN1 = 0;
+		pDr7->useStruct.RW1 = 0;
+		SetThreadContext(hThread, &stxCxt);
+		m_vecBp.push_back(bi);
+	}
+	else if (stxCxt.Dr2 == 0)
+	{
+		stxCxt.Dr0 = dwAddress;//要设置硬件断点的地址
+		PDBG_REG7 pDr7 = (PDBG_REG7)&stxCxt.Dr7;//调试寄存器7
+		pDr7->useStruct.L2 = TRUE;
+		pDr7->useStruct.LEN2 = 0;
+		pDr7->useStruct.RW2 = 0;
+		SetThreadContext(hThread, &stxCxt);
+		m_vecBp.push_back(bi);
+	}
+	else if (stxCxt.Dr3 == 0)
+	{
+		stxCxt.Dr0 = dwAddress;//要设置硬件断点的地址
+		PDBG_REG7 pDr7 = (PDBG_REG7)&stxCxt.Dr7;//调试 寄存器7
+		pDr7->useStruct.L3 = TRUE;
+		pDr7->useStruct.LEN3 = 0;
+		pDr7->useStruct.RW3 = 0;
+		SetThreadContext(hThread, &stxCxt);
+		m_vecBp.push_back(bi);
+	}
+	else
+	{
+		MessageBox(NULL, L"硬件断点已满，无法设置断点", L"错误", MB_OK);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 VOID CDebug::ShowRegisterInfo(CONTEXT& ct)
 {
 	OutputDebugString(L"显示寄存器信息\n");
@@ -258,6 +320,10 @@ void CDebug::WaitforUserCommand(DEBUG_EVENT& de)
 			return;
 		case 'b':
 			UserCommandBk(szCommand, de);
+			break;
+		case 'k':
+			UserCommandHk(szCommand, de);
+			break;
 		default:
 			break;
 		}
@@ -561,8 +627,8 @@ void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
 	EFLAGS* eflags = (EFLAGS*)&ct.EFlags;
 	for (int i = 0; i < m_vecBp.size(); i++)
 	{
-		
-		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress== m_vecBp[i].dwAddress)
+		//自己定义的cc
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress &&m_vecBp[i].bt == BP_CC)
 		{	//恢复断点之前的内容
 			ct.Eip--;
 			ResetAllCC(hProcess);
@@ -574,6 +640,13 @@ void CDebug::UserCommandGO(CHAR* pCommand, DEBUG_EVENT& de )
 				IsSingle = FALSE;
 			}
 			
+		}
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress &&m_vecBp[i].bt == BP_HP)
+		{
+			PDBG_REG7 pDr7 = (PDBG_REG7)&ct.Dr7;//调试寄存器7
+			pDr7->useStruct.L0 = FALSE;
+			SetThreadContext(hThread, &ct);
+			ToDelOfHK = i;
 		}
 	}
 	CloseHandle(hProcess);
@@ -599,6 +672,23 @@ void CDebug::UserCommandBk(CHAR* pCommand, DEBUG_EVENT& de)
 	bi.dwAddress = dwAddress2;
 	bi.bOnce = FALSE;
 	SetCcBreakPoint(hProcess, dwAddress2, bi.u.bCCOld);
-
 	m_vecBp.push_back(bi);
+}
+
+void CDebug::UserCommandHk(CHAR* szCommand, DEBUG_EVENT& de)
+{
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, 0, de.dwThreadId);
+	char seps[] = " ";
+	char *token = NULL;
+	char *next_token = NULL;
+
+	// token = 'u'
+	token = strtok_s(szCommand, seps, &next_token);
+	//2.1 反汇编地址
+	// token = address(123456)
+	token = strtok_s(NULL, seps, &next_token);
+	DWORD dwAddress2 = strtol(token, NULL, 16);
+	//设置硬件断点
+	SetHkBreakPoint(hThread, dwAddress2);
 }
