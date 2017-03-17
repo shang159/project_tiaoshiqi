@@ -236,7 +236,7 @@ BOOL CDebug::SetHkBreakPoint(HANDLE hThread, DWORD dwAddress)
 	return TRUE;
 }
 
-VOID CDebug::ShowRegisterInfo(CONTEXT& ct)
+void CDebug::ShowRegisterInfo(CONTEXT& ct)
 {
 	OutputDebugString(L"显示寄存器信息\n");
 	printf("EAX = %08X ", ct.Eax);
@@ -275,27 +275,39 @@ DWORD CDebug::OnExceptionCc(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"软件断点\n");
 	DWORD dwRet = DBG_CONTINUE;
-	WaitforUserCommand(de);
+	DoSomethingbefore(de);
 	return dwRet;
 }
 DWORD CDebug::OnExceptionSingleStep(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"单步断点\n");
 	DWORD dwRet = DBG_CONTINUE;
-	IsSingle = TRUE;
-	if (isCmdgo)
-	{
-		return dwRet;
-	}
-	WaitforUserCommand(de);
+	DoSomethingbefore(de);
 	return dwRet;
 }
 DWORD CDebug::OnExceptionAccess(DEBUG_EVENT& de)
 {
 	OutputDebugString(L"内存访问异常\n");
 	DWORD dwRet = DBG_EXCEPTION_NOT_HANDLED;
-	//WaitforUserCommand();
 	return dwRet;
+}
+void CDebug::DoSomethingbefore(DEBUG_EVENT& de)
+{
+	if (m_torecoverycc!=-1)
+	{
+		HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+		SetallCC(hProcess);
+		m_torecoverycc = -1;
+	}
+	if (m_nOnce!=-1)
+	{
+
+		HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, m_pi.dwProcessId);
+		SetallCC(hProcess);
+		m_nOnce = -1;
+		return;
+	}
+	WaitforUserCommand(de);
 }
 void CDebug::WaitforUserCommand(DEBUG_EVENT& de)
 {
@@ -436,12 +448,11 @@ void CDebug::UserCommandF7(CHAR* pCommand, DEBUG_EVENT& de)
 	CONTEXT ct = {};
 	ct.ContextFlags = CONTEXT_ALL;// all register
 	GetThreadContext(hThread, &ct);
-
 	EFLAGS* eflags = (EFLAGS*)&ct.EFlags;
 	for (int i = 0; i < m_vecBp.size(); i++)
 	{
 		//判断cc是自己修改的还是系统自带的
-		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress==m_vecBp[i].dwAddress)
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress==m_vecBp[i].dwAddress&&m_vecBp[i].bt==BP_CC)
 		{
 			//如果是自己设置的  并且是单步运行到此处
 			if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == ct.Eip)
@@ -449,12 +460,8 @@ void CDebug::UserCommandF7(CHAR* pCommand, DEBUG_EVENT& de)
 				ResetAllCC(hProcess);
 				eflags->TF = 1;
 				SetThreadContext(hThread, &ct);
-				if (IsSingle)
-				{
-					SetallCC(hProcess);
-					IsSingle = false;
-				}
-			}
+				m_torecoverycc = i;
+ 			}
 
 			//如果是自己设置的  并且是GO 运行到此处
 			else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress + 1 == ct.Eip)
@@ -463,15 +470,15 @@ void CDebug::UserCommandF7(CHAR* pCommand, DEBUG_EVENT& de)
 				ResetAllCC(hProcess);
 				eflags->TF = 1;
 				SetThreadContext(hThread, &ct);
-				if (IsSingle)
-				{
-					SetallCC(hProcess);
-					IsSingle = false;
-				}
+				m_torecoverycc = i;
 			}
 		} 		
-		//如果是系统自身的，则设置单步。 
-		else
+		//如果是系统自身的，则设置单步。
+		else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress&&m_vecBp[i].bt == BP_HP)
+		{
+
+		}
+		else//不在断点列表
 		{
 			eflags->TF = 1;
 			SetThreadContext(hThread, &ct);
@@ -501,20 +508,22 @@ void CDebug::UserCommandF8(CHAR* pCommand, DEBUG_EVENT& de)
 	DWORD dwAddress = ct.Eip;
 	uLen = DBG_Disasm(hProcess, (PVOID)dwAddress, szOpCode, szAsm, szComment);
 	token = wcstok_s(szAsm, seps, &next_token);
-	for (int i = 0; i < m_vecBp.size(); i++)
+	int vecsize = m_vecBp.size();
+	for (int i = 0; i < vecsize; i++)
 	{
-		//判断cc是自己修改的还是系统自带的
-		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress)
+		//判断断点是自己修改的软件断点
+		if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress&&m_vecBp[i].bt==BP_CC)
 		{
-
-			//如果是自己设置的  并且是单步运行到此处
+			//是单步运行到此处
 			if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == ct.Eip)
 			{
-				//如果停止的eip并不是call 或者rep
+				ResetAllCC(hProcess);
+				uLen = DBG_Disasm(hProcess, (PVOID)ct.Eip, szOpCode, szAsm, szComment);
+				token = wcstok_s(szAsm, seps, &next_token);
+				//如果停止的下一条是call 或者rep
 				if (wcscmp(token, L"call") == 0 || wcscmp(token, L"rep") == 0)
 				{
-
-
+	
 					BPINFO bi = {};
 					bi.bt = BP_CC;
 					bi.dwAddress = ct.Eip + uLen;
@@ -522,71 +531,53 @@ void CDebug::UserCommandF8(CHAR* pCommand, DEBUG_EVENT& de)
 					SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
 					m_vecBp.push_back(bi);
 					eflags->TF = 1;
-					if (IsSingle)
-					{
-						SetallCC(hProcess);
-					}
+					SetThreadContext(hThread, &ct);
+					m_nOnce = m_vecBp.size() - 1;
 					
 				}
-				//如果eip指向call之类的
+				//如果eip不是
 				else
 				{
+
 					eflags->TF = 1;
 					SetThreadContext(hThread, &ct);
-					IsSingle = TRUE;
+					m_torecoverycc = i;
 				}
 			}
 			//如果是自己设置的  并且是GO 运行到此处
 			else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress + 1 == ct.Eip)
 			{
-		
+				ct.Eip--;
+				ResetAllCC(hProcess);
+				uLen = DBG_Disasm(hProcess, (PVOID)ct.Eip, szOpCode, szAsm, szComment);
+				token = wcstok_s(szAsm, seps, &next_token);
+				
 				//如果是call之类的
 				if (wcscmp(token, L"call") == 0 || wcscmp(token, L"rep") == 0)
 				{
-					
-					if (IsSingle)
-					{
-						SetallCC(hProcess);
-						IsSingle = FALSE;
-					}
-					else
-					{
-						BPINFO bi = {};
-						bi.bt = BP_CC;
-						bi.dwAddress = ct.Eip + uLen;
-						bi.bOnce = TRUE;
-						SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
-						m_vecBp.push_back(bi);
-						ct.Eip--;
-						eflags->TF = 1;
-					}
-
-
-					
+					BPINFO bi = {};
+					bi.bt = BP_CC;
+					bi.dwAddress = ct.Eip + uLen;
+					bi.bOnce = TRUE;
+					SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
+					m_vecBp.push_back(bi);
+					eflags->TF = 1;
+					SetThreadContext(hThread, &ct);
+					m_nOnce = m_vecBp.size() - 1;
 				}
-				//如果停止的eip并不是call 或者rep
+				//如果停止的下一条并不是call 或者rep
 				else
 				{
-
 					eflags->TF = 1;
-					ct.Eip--;
 					SetThreadContext(hThread, &ct);
-					if (m_vecBp[i].bOnce)
-					{
-						BPINFO bi = {};
-						bi.bOnce = TRUE;
-						ResetCC(hProcess, m_vecBp[i]);
-						IsCmdF8 = true;
-					}
-					if (IsSingle)
-					{
-						SetallCC(hProcess);
-						IsSingle = FALSE;
-					}
-					//IsSingle = TRUE;
+					m_torecoverycc = i;
 				}
 
 			}
+		}
+		else if ((DWORD)de.u.Exception.ExceptionRecord.ExceptionAddress == m_vecBp[i].dwAddress&&m_vecBp[i].bt == BP_CC)
+		{
+
 		}
 		//如果是系统自身的软件断点
 		else
@@ -600,7 +591,9 @@ void CDebug::UserCommandF8(CHAR* pCommand, DEBUG_EVENT& de)
 				bi.bOnce = TRUE;
 				SetCcBreakPoint(hProcess, ct.Eip + uLen, bi.u.bCCOld);
 				m_vecBp.push_back(bi);
-				return;
+				eflags->TF = 1;
+				SetThreadContext(hThread, &ct);
+				m_nOnce = m_vecBp.size() - 1;
 				
 			}
 			//如果不是call

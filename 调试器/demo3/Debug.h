@@ -123,10 +123,11 @@ public:
 	
 	BOOL SetCcBreakPoint(HANDLE hProcess, DWORD dwAddress, BYTE& oldByte);
 	BOOL SetHkBreakPoint(HANDLE hProcess, DWORD dwAddress);
-	VOID ShowRegisterInfo(CONTEXT& ct);
+	void ShowRegisterInfo(CONTEXT& ct);
 	DWORD OnExceptionCc(DEBUG_EVENT& de);
 	DWORD OnExceptionSingleStep(DEBUG_EVENT& de);
 	DWORD OnExceptionAccess(DEBUG_EVENT& de);
+	void DoSomethingbefore(DEBUG_EVENT& de);
 	void WaitforUserCommand(DEBUG_EVENT& de);
 	void UserCommandDisasm(CHAR* pCommand);
 	void ResetAllCC(HANDLE hProcess);
@@ -145,5 +146,7 @@ public:
 	int ToDelOfHK = 0;
 	BOOL isCmdgo;
 	BOOL IsCmdF8=FALSE;
+	int m_torecoverycc=-1;
+	int m_nOnce = -1;
 };
 
